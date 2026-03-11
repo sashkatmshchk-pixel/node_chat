@@ -28,7 +28,7 @@ io.on('connection', (socket) => {
 
   socket.emit('rooms', Object.keys(rooms));
   socket.emit('history', rooms[currentRoom].messages);
-  io.emit('users', rooms[currentRoom].users);
+  io.to(currentRoom).emit('users', rooms[currentRoom].users);
 
   socket.on('setUsername', (name) => {
     username = name;
@@ -37,7 +37,7 @@ io.on('connection', (socket) => {
       rooms[currentRoom].users.push(username);
     }
 
-    io.emit('users', rooms[currentRoom].users);
+    io.to(currentRoom).emit('users', rooms[currentRoom].users);
   });
 
   socket.on('createRoom', (roomName) => {
@@ -52,35 +52,61 @@ io.on('connection', (socket) => {
   });
 
   socket.on('renameRoom', ({ oldName, newName }) => {
-    if (!rooms[oldName] || rooms[newName]) {
-      return;
-    }
+    if (!rooms[oldName] || rooms[newName]) return;
 
     rooms[newName] = rooms[oldName];
     delete rooms[oldName];
+
+    io.sockets.sockets.forEach((s) => {
+      if (s.rooms.has(oldName)) {
+        s.leave(oldName);
+        s.join(newName);
+
+        if (s === socket) {
+          currentRoom = newName;
+        }
+      }
+    });
 
     io.emit('rooms', Object.keys(rooms));
   });
 
   socket.on('deleteRoom', (roomName) => {
-    if (roomName === 'general') {
-      return;
-    }
+    if (roomName === 'general') return;
+    if (!rooms[roomName]) return;
 
-    if (rooms[roomName]) {
-      delete rooms[roomName];
-      io.emit('rooms', Object.keys(rooms));
-    }
+    io.sockets.sockets.forEach((s) => {
+      if (s.rooms.has(roomName)) {
+        s.leave(roomName);
+        s.join('general');
+      }
+    });
+
+    delete rooms[roomName];
+
+    io.emit('rooms', Object.keys(rooms));
   });
 
   socket.on('joinRoom', (roomName) => {
+    if (!rooms[roomName]) return;
+
     socket.leave(currentRoom);
 
+    rooms[currentRoom].users =
+      rooms[currentRoom].users.filter((user) => user !== username);
+
+    io.to(currentRoom).emit('users', rooms[currentRoom].users);
+
     currentRoom = roomName;
+
     socket.join(currentRoom);
 
+    if (!rooms[currentRoom].users.includes(username)) {
+      rooms[currentRoom].users.push(username);
+    }
+
     socket.emit('history', rooms[currentRoom].messages);
-    io.emit('users', rooms[currentRoom].users);
+    io.to(currentRoom).emit('users', rooms[currentRoom].users);
   });
 
   socket.on('message', (data) => {
@@ -96,11 +122,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    rooms[currentRoom].users = rooms[currentRoom].users.filter(
-      (user) => user !== username,
-    );
+    rooms[currentRoom].users =
+      rooms[currentRoom].users.filter((user) => user !== username);
 
-    io.emit('users', rooms[currentRoom].users);
+    io.to(currentRoom).emit('users', rooms[currentRoom].users);
   });
 });
 
