@@ -11,77 +11,97 @@ const io = new Server(server);
 
 const PORT = 3000;
 
-const rooms = {
-  general: [],
-};
-
-const users = {};
-
 app.use(express.static(path.join(__dirname, '../public')));
 
+const rooms = {
+  general: {
+    messages: [],
+    users: [],
+  },
+};
+
 io.on('connection', (socket) => {
+  let username = 'Anonymous';
   let currentRoom = 'general';
 
   socket.join(currentRoom);
-  users[socket.id] = { room: currentRoom };
 
-  socket.emit('history', rooms[currentRoom]);
-  sendUsers(currentRoom);
+  socket.emit('rooms', Object.keys(rooms));
+  socket.emit('history', rooms[currentRoom].messages);
+  io.emit('users', rooms[currentRoom].users);
 
-  socket.on('setUsername', (username) => {
-    users[socket.id].name = username;
-    sendUsers(currentRoom);
+  socket.on('setUsername', (name) => {
+    username = name;
+
+    if (!rooms[currentRoom].users.includes(username)) {
+      rooms[currentRoom].users.push(username);
+    }
+
+    io.emit('users', rooms[currentRoom].users);
   });
 
-  socket.on('createRoom', (room) => {
-    if (!rooms[room]) {
-      rooms[room] = [];
-      io.emit('roomCreated', room);
+  socket.on('createRoom', (roomName) => {
+    if (!rooms[roomName]) {
+      rooms[roomName] = {
+        messages: [],
+        users: [],
+      };
+
+      io.emit('rooms', Object.keys(rooms));
     }
   });
 
-  socket.on('joinRoom', (room) => {
+  socket.on('renameRoom', ({ oldName, newName }) => {
+    if (!rooms[oldName] || rooms[newName]) {
+      return;
+    }
+
+    rooms[newName] = rooms[oldName];
+    delete rooms[oldName];
+
+    io.emit('rooms', Object.keys(rooms));
+  });
+
+  socket.on('deleteRoom', (roomName) => {
+    if (roomName === 'general') {
+      return;
+    }
+
+    if (rooms[roomName]) {
+      delete rooms[roomName];
+      io.emit('rooms', Object.keys(rooms));
+    }
+  });
+
+  socket.on('joinRoom', (roomName) => {
     socket.leave(currentRoom);
 
-    currentRoom = room;
-
-    if (!rooms[currentRoom]) {
-      rooms[currentRoom] = [];
-    }
-
-    users[socket.id].room = currentRoom;
-
+    currentRoom = roomName;
     socket.join(currentRoom);
 
-    socket.emit('history', rooms[currentRoom]);
-
-    sendUsers(currentRoom);
+    socket.emit('history', rooms[currentRoom].messages);
+    io.emit('users', rooms[currentRoom].users);
   });
 
   socket.on('message', (data) => {
     const message = {
-      author: data.author,
+      author: username,
       text: data.text,
       time: new Date().toLocaleTimeString(),
     };
 
-    rooms[currentRoom].push(message);
+    rooms[currentRoom].messages.push(message);
 
     io.to(currentRoom).emit('message', message);
   });
 
   socket.on('disconnect', () => {
-    delete users[socket.id];
-    sendUsers(currentRoom);
+    rooms[currentRoom].users = rooms[currentRoom].users.filter(
+      (user) => user !== username,
+    );
+
+    io.emit('users', rooms[currentRoom].users);
   });
-
-  function sendUsers(room) {
-    const roomUsers = Object.values(users)
-      .filter((u) => u.room === room && u.name)
-      .map((u) => u.name);
-
-    io.to(room).emit('users', roomUsers);
-  }
 });
 
 server.listen(PORT);
